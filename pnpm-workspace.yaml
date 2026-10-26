@@ -1,0 +1,16 @@
+minimumReleaseAge: 4320
+minimumReleaseAgeExclude:
+  # polytypo 1.16.0 (lt locale) was published 2026-10-25 and is the only release in ^1.16.0.
+  # Remove this entry after 2026-10-28.
+  - polytypo@1.16.0
+
+allowBuilds: {}
+
+strictDepBuilds: true
+blockExoticSubdeps: true
+trustPolicy: no-downgrade
+
+audit:
+  ignore: []
+
+overrides: {}

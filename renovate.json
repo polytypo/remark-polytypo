@@ -1,0 +1,52 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "security:minimumReleaseAgeNpm",
+    ":maintainLockFilesWeekly",
+    "abandonments:recommended"
+  ],
+  "timezone": "Europe/Helsinki",
+  "schedule": ["before 6am on monday"],
+  "dependencyDashboard": true,
+  "dependencyDashboardApproval": true,
+  "labels": ["dependencies"],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "dependencyDashboardApproval": false,
+    "labels": ["dependencies", "security"]
+  },
+  "packageRules": [
+    {
+      "description": "One weekly PR for all non-major updates.",
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
+      "groupName": "non-major"
+    },
+    {
+      "description": "A new major waits 30 days (dependency-upgrades playbook section 3).",
+      "matchUpdateTypes": ["major"],
+      "minimumReleaseAge": "30 days"
+    },
+    {
+      "description": "Matrix: pnpm 11.",
+      "matchPackageNames": ["pnpm"],
+      "allowedVersions": "<12"
+    },
+    {
+      "description": "Matrix: typescript-eslint peer is <6.1.",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<7"
+    },
+    {
+      "description": "Hold: the Node 20 test job in ci.yml. Vitest 5 requires Node 22.12 or newer. See docs/dependency-security.md.",
+      "matchPackageNames": ["vitest"],
+      "allowedVersions": "<5"
+    },
+    {
+      "description": "Matrix: @types/node follows the runtime major used in CI (24).",
+      "matchPackageNames": ["@types/node"],
+      "allowedVersions": "<25"
+    }
+  ]
+}
