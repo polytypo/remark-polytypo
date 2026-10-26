@@ -4,7 +4,7 @@
 // consumer resolving the shipped declarations. `--tarball <path>` tests an existing tarball
 // (the release job passes the one it is about to publish); without it, one is packed first.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +43,29 @@ for (const required of [
 ]) {
   if (!listing.includes(required)) throw new Error(`missing from the tarball: ${required}`);
 }
+
+// Every bare import in the shipped declarations must be a declared dependency or peer, so the
+// declarations resolve under a strict layout such as pnpm's, where nothing else is reachable.
+const extracted = path.join(work, "extracted");
+mkdirSync(extracted);
+run("tar", ["-xzf", tarball, "-C", extracted], root);
+const pkg = JSON.parse(readFileSync(path.join(extracted, "package", "package.json"), "utf8"));
+const declared = new Set([
+  ...Object.keys(pkg.dependencies ?? {}),
+  ...Object.keys(pkg.peerDependencies ?? {}),
+]);
+const dts = readFileSync(path.join(extracted, "package", "dist", "index.d.ts"), "utf8");
+for (const match of dts.matchAll(/(?:from|import\()\s*["']([^"'.][^"']*)["']/g)) {
+  const parts = match[1].split("/");
+  const name = match[1].startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
+  const typesName = name.startsWith("@")
+    ? `@types/${name.slice(1).replace("/", "__")}`
+    : `@types/${name}`;
+  if (!declared.has(name) && !declared.has(typesName)) {
+    throw new Error(`dist/index.d.ts imports "${match[1]}", which is not a dependency or peer`);
+  }
+}
+console.log("declaration imports: ok");
 
 const consumer = path.join(work, "consumer");
 mkdirSync(consumer);

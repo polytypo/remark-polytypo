@@ -1,8 +1,7 @@
 import type { Root } from "mdast";
 import { transform } from "polytypo";
 import type { Dialect, Options } from "polytypo";
-import type { Processor } from "unified";
-import type { VFile } from "vfile";
+import type { Processor, Transformer } from "unified";
 
 /**
  * Everything `polytypo` takes in `markdown` mode. `locale` and `dialect` are required and have no
@@ -23,6 +22,7 @@ interface Place {
 }
 
 type Position = NonNullable<Root["position"]>;
+type File = Parameters<Transformer<Root>>[1];
 
 interface AnyNode {
   type: string;
@@ -44,6 +44,9 @@ interface Scope {
 }
 
 const ORIGIN = "remark-polytypo";
+// Quote pairing and spacing reach across the blocks of a quotation, list or footnote, so these are
+// carried or left unchanged as a whole.
+const CONTAINERS: ReadonlySet<string> = new Set(["blockquote", "list", "footnoteDefinition"]);
 const TEXT_BLOCKS: ReadonlySet<string> = new Set(["paragraph", "heading", "tableCell"]);
 const IGNORED_FIELDS: ReadonlySet<string> = new Set(["children", "position", "data"]);
 
@@ -82,11 +85,14 @@ function isSame(a: unknown, b: unknown): boolean {
  * the plugin list: a plugin before it that changes the tree makes the affected nodes unmatchable,
  * and they are left as they are.
  */
-export default function remarkPolytypo(this: Processor, options: RemarkPolytypoOptions) {
+export default function remarkPolytypo(
+  this: Processor,
+  options: RemarkPolytypoOptions,
+): Transformer<Root> {
   const parse = this.parse.bind(this);
   const hasFrontmatterKeys = options.frontmatterKeys !== undefined;
 
-  return function transformer(tree: Root, file: VFile): void {
+  return function transformer(tree: Root, file: File): void {
     const source = String(file);
     if (source === "") {
       if (tree.children.length === 0) return;
@@ -94,6 +100,15 @@ export default function remarkPolytypo(this: Processor, options: RemarkPolytypoO
         "The file has no source text, and this plugin works on the source. Pass a VFile whose value is the Markdown the tree was parsed from.",
         { place: undefined, source: ORIGIN, ruleId: "no-source" },
       );
+    }
+
+    if (hasFrontmatterKeys && /^\uFEFF?---[ \t]*\r?\n/.test(source)) {
+      if (!tree.children.some((child) => (child.type as string) === "yaml")) {
+        file.message(
+          "frontmatterKeys is set and the document starts with a frontmatter block, but the tree has no yaml node. Add remark-frontmatter before this plugin.",
+          { source: ORIGIN, ruleId: "frontmatter-not-parsed" },
+        );
+      }
     }
 
     const output = transform(source, { ...options, mode: "markdown" });
@@ -123,31 +138,50 @@ export default function remarkPolytypo(this: Processor, options: RemarkPolytypoO
       }
       return scope;
     };
+    const taint = (unit: AnyNode, at: AnyNode, why: string): void => {
+      scopeOf(unit).isTainted = true;
+      file.message(`${why}; the enclosing ${unit.type} was left unchanged.`, {
+        place: at.position as Position | undefined,
+        source: ORIGIN,
+        ruleId: "left-unchanged",
+      });
+    };
 
-    // Typography is carried per text block (paragraph, heading, table cell), all or nothing.
-    // Quote pairing, dashes and spacing reach across the nodes of one block, so carrying only
-    // some of its edits would leave a quotation half converted.
-    const compare = (a: AnyNode, b: AnyNode, parent: AnyNode, block: AnyNode | undefined): void => {
+    // The unit that is carried whole or not at all: the outermost blockquote, list or footnote
+    // definition, otherwise the text block (paragraph, heading, table cell).
+    const compare = (
+      a: AnyNode,
+      b: AnyNode,
+      parent: AnyNode,
+      block: AnyNode | undefined,
+      container: AnyNode | undefined,
+    ): void => {
       const childrenA = a.children;
       const childrenB = b.children;
+      const here = TEXT_BLOCKS.has(a.type) ? a : block;
+      const outer = container ?? (CONTAINERS.has(a.type) ? a : undefined);
+      const unit = outer ?? here;
       if (
         a.type !== b.type ||
         (childrenA === undefined) !== (childrenB === undefined) ||
         (childrenA?.length ?? 0) !== (childrenB?.length ?? 0)
       ) {
-        file.fail(
-          `The document parses to a different tree after typography (${a.type} vs ${b.type}). The edit was not applied.`,
-          { place: a.position as Position | undefined, source: ORIGIN, ruleId: "tree-shape" },
-        );
+        if (here === undefined || unit === undefined) {
+          file.fail(
+            `The document parses to a different tree after typography (${a.type} vs ${b.type}). The edit was not applied.`,
+            { place: a.position as Position | undefined, source: ORIGIN, ruleId: "tree-shape" },
+          );
+        }
+        taint(unit, a, `Typography would change how the text around a \`${a.type}\` node parses`);
+        return;
       }
-      const here = TEXT_BLOCKS.has(a.type) ? a : block;
       const prose = proseField(a.type, hasFrontmatterKeys);
       const unsupported: string[] = [];
       for (const field of new Set([...Object.keys(a), ...Object.keys(b)])) {
         if (IGNORED_FIELDS.has(field) || isSame(a[field], b[field])) continue;
         const to = b[field];
         if (field === prose && typeof to === "string") {
-          scopeOf(here ?? parent).edits.push({ node: a, field, to });
+          scopeOf(unit ?? parent).edits.push({ node: a, field, to });
         } else {
           unsupported.push(field);
         }
@@ -156,18 +190,22 @@ export default function remarkPolytypo(this: Processor, options: RemarkPolytypoO
         // A literal whose delimiters are fixed (math, code, html, an expression) cannot move the
         // boundary of its neighbours. Anything else, such as a link whose URL would change, can.
         const isLiteral = childrenA === undefined && unsupported.join() === "value";
-        const isBlockTainted = here !== undefined && !isLiteral;
-        if (isBlockTainted) scopeOf(here).isTainted = true;
-        file.message(
-          `Typography would change a \`${a.type}\` node outside the prose fields; ${isBlockTainted ? "the text around it was left unchanged too" : "the change was not applied"}.`,
-          { place: a.position as Position | undefined, source: ORIGIN, ruleId: "skipped-edit" },
-        );
+        if (unit !== undefined && !isLiteral) {
+          taint(unit, a, `Typography would change a \`${a.type}\` node outside the prose fields`);
+        } else {
+          file.message(
+            `Typography would change a \`${a.type}\` node outside the prose fields; that change was dropped.`,
+            { place: a.position as Position | undefined, source: ORIGIN, ruleId: "dropped-change" },
+          );
+        }
       }
       if (childrenA && childrenB) {
-        childrenA.forEach((child, index) => compare(child, childrenB[index] as AnyNode, a, here));
+        childrenA.forEach((child, index) =>
+          compare(child, childrenB[index] as AnyNode, a, here, outer),
+        );
       }
     };
-    compare(before, after, before, undefined);
+    compare(before, after, before, undefined, undefined);
 
     const wanted = new Set<string>();
     for (const scope of scopes.values()) {
@@ -208,7 +246,7 @@ export default function remarkPolytypo(this: Processor, options: RemarkPolytypoO
       }
       if (!isMatched) {
         file.message(
-          "Typography was not applied to this text: its nodes no longer match the source, because an earlier plugin changed them or they carry no position.",
+          `Typography was not applied to this ${scope.node.type}: its nodes no longer match the source, because an earlier plugin changed them or they carry no position.`,
           {
             place: scope.node.position as Position | undefined,
             source: ORIGIN,

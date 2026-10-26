@@ -21,7 +21,7 @@ describe("warnings", () => {
     expect(flat).toContain(" after ‘y’.");
     expect(file.messages).toHaveLength(1);
     expect(file.messages[0]?.source).toBe("remark-polytypo");
-    expect(file.messages[0]?.ruleId).toBe("skipped-edit");
+    expect(file.messages[0]?.ruleId).toBe("dropped-change");
     expect(file.messages[0]?.reason).toContain("inlineMath");
     expect(file.messages[0]?.place).toMatchObject({ start: { line: 1 } });
   });
@@ -176,7 +176,7 @@ describe("text blocks are carried whole or not at all", () => {
       "text:Other ‘text’ – here.",
     ]);
     expect(JSON.stringify(tree)).toContain('"url":"https://example.com"');
-    expect(file.messages.map((m) => m.ruleId)).toEqual(["skipped-edit"]);
+    expect(file.messages.map((m) => m.ruleId)).toEqual(["left-unchanged"]);
   });
 
   it("a block holding a www literal (no positions) is left unchanged and says so", async () => {
@@ -210,5 +210,108 @@ describe("plugin order", () => {
     const tree = (await processor.run(processor.parse(file), file)) as Root;
     expect(texts(tree)[0]).toContain("“it’s fine”");
     expect(file.messages.map((m) => m.ruleId)).toEqual(["unmatched-edit", "unmatched-edit"]);
+  });
+});
+
+describe("a quotation that spans blocks is carried whole or not at all", () => {
+  const run = (source: string) => runPlugin({ dialect: "commonmark", source }, "en-GB");
+  const unchanged = (tree: Root, source: string) => {
+    const plain = texts(parser("commonmark").parse(source));
+    expect(texts(tree)).toEqual(plain);
+  };
+
+  it("paragraph: a quote closing right after a bare URL does not throw", async () => {
+    const source = `Visit "https://example.com"\n`;
+    const { tree, file } = await run(source);
+    unchanged(tree, source);
+    expect(file.messages.map((m) => m.ruleId)).toEqual(["left-unchanged"]);
+  });
+
+  it("blockquote: a shape change in one paragraph leaves the whole blockquote unchanged", async () => {
+    const source = `> "Uptime for https://example.com"\n>\n> two" -- x\n\nOutside "text" -- here.\n`;
+    const { tree, file } = await run(source);
+    expect(texts(tree)).toEqual([
+      ...texts(parser("commonmark").parse(`> "Uptime for https://example.com"\n>\n> two" -- x\n`)),
+      "text:Outside ‘text’ – here.",
+    ]);
+    expect(file.messages.map((m) => m.ruleId)).toEqual(["left-unchanged"]);
+  });
+
+  it("blockquote: a skipped first paragraph keeps the second one unchanged too", async () => {
+    const source = `> "quote -- one www.\n>\n> two" -- x\n`;
+    const { tree, file } = await run(source);
+    unchanged(tree, source);
+    expect(file.messages.map((m) => m.ruleId)).toEqual(["unmatched-edit"]);
+  });
+
+  it("list: an unmatched item keeps the other items unchanged too", async () => {
+    const source = `- "quote -- one www.\n- two" -- x\n`;
+    const { tree, file } = await run(source);
+    unchanged(tree, source);
+    expect(file.messages.map((m) => m.ruleId)).toEqual(["unmatched-edit"]);
+  });
+
+  it("list item: a shape change in one item leaves the whole list unchanged", async () => {
+    const source = `- "Uptime for https://example.com"\n- two" -- x\n\nOutside "t" -- y\n`;
+    const { tree, file } = await run(source);
+    expect(texts(tree).at(-1)).toBe("text:Outside ‘t’ – y");
+    expect(texts(tree)[0]).toBe('text:"Uptime for ');
+    expect(texts(tree)).toContain('text:two" -- x');
+    expect(file.messages.map((m) => m.ruleId)).toEqual(["left-unchanged"]);
+  });
+});
+
+const BOM = String.fromCharCode(0xfeff);
+
+describe("sources with a BOM or CRLF line endings", () => {
+  it("converts text from a CRLF source", async () => {
+    const { tree, file } = await runPlugin(
+      { dialect: "commonmark", source: `First "one" -- x\r\n\r\nSecond "two" -- y\r\n` },
+      "en-GB",
+    );
+    expect(texts(tree)).toEqual(["text:First ‘one’ – x", "text:Second ‘two’ – y"]);
+    expect(file.messages).toEqual([]);
+  });
+
+  it("converts text from a source with a BOM", async () => {
+    const { tree, file } = await runPlugin(
+      { dialect: "commonmark", source: `${BOM}First "one" -- x\r\n` },
+      "en-GB",
+    );
+    expect(texts(tree).join("")).toContain("‘one’ – x");
+    expect(file.messages).toEqual([]);
+  });
+
+  it("converts frontmatter keys in a BOM + CRLF source", async () => {
+    const { tree } = await runPlugin(
+      {
+        dialect: "commonmark",
+        source: `${BOM}---\r\ntitle: "A -- b"\r\n---\r\n\r\nbody\r\n`,
+        frontmatterKeys: ["title"],
+      },
+      "en-GB",
+    );
+    expect(texts(tree)[0]).toContain("A – b");
+  });
+});
+
+describe("frontmatterKeys without remark-frontmatter", () => {
+  it("warns that the tree has no yaml node", async () => {
+    const source = `---\ntitle: "A -- b"\n---\n\nbody "x"\n`;
+    const processor = unified()
+      .use((await import("remark-parse")).default)
+      .use(remarkPolytypo, { locale: "en-GB", dialect: "commonmark", frontmatterKeys: ["title"] });
+    const file = new VFile(source);
+    await processor.run(processor.parse(file), file);
+    expect(file.messages.map((m) => m.ruleId)).toContain("frontmatter-not-parsed");
+  });
+
+  it("does not warn for a document without frontmatter", async () => {
+    const processor = unified()
+      .use((await import("remark-parse")).default)
+      .use(remarkPolytypo, { locale: "en-GB", dialect: "commonmark", frontmatterKeys: ["title"] });
+    const file = new VFile(`body "x"\n`);
+    await processor.run(processor.parse(file), file);
+    expect(file.messages).toEqual([]);
   });
 });

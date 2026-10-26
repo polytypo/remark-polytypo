@@ -47,33 +47,18 @@ await compile(source, {
 
 ### Astro
 
-`@astrojs/mdx` extends your project's `markdown` configuration by default (`extendMarkdownConfig`
-is `true`), so a plugin configured for Markdown also runs on `.mdx` files, with the dialect you gave
-it. `.md` and `.mdx` need different dialects, so give the MDX integration its own list:
-
-```js
-// astro.config.mjs
-import { defineConfig } from "astro/config";
-import mdx from "@astrojs/mdx";
-import remarkPolytypo from "remark-polytypo";
-
-export default defineConfig({
-  integrations: [
-    mdx({
-      extendMarkdownConfig: false,
-      remarkPlugins: [[remarkPolytypo, { locale: "en-GB", dialect: "mdx" }]],
-    }),
-  ],
-});
-```
-
-Astro's `markdown.smartypants` option defaults to `true`. SmartyPants converts the same quotes and
-dashes this plugin does, and text that another plugin has already changed is left as it is (see
-below), so turn `smartypants` off when you use this plugin.
+`@astrojs/mdx` has an `extendMarkdownConfig` option that defaults to `true`: MDX inherits the
+project's `markdown` configuration (Astro's MDX integration guide). A plugin configured there
+therefore also runs on `.mdx` files with the same options, and `.md` and `.mdx` need different
+`dialect` values. In `@astrojs/mdx` 8.1.1 the integration accepts `extendMarkdownConfig` and
+`remarkPlugins`, and marks `remarkPlugins` as deprecated in favour of
+`unified({ remarkPlugins })` from `@astrojs/markdown-remark` used as `markdown.processor`. Check the
+Astro documentation for your version before choosing where to list the plugin.
 
 ### Next.js (`@next/mdx`)
 
-With Turbopack, plugins are passed by name and their options must be serializable, which they are:
+The Next.js MDX guide says that with Turbopack plugins are named as strings, with serializable
+options:
 
 ```js
 // next.config.mjs
@@ -125,19 +110,24 @@ still the one the parser produced. So:
 Anything the plugin cannot apply safely is left as it was, and a message is added to `file.messages`
 (source `remark-polytypo`):
 
-| `ruleId`         | Meaning                                                                                                                                                                                  |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `skipped-edit`   | polytypo changed text that lives in a node other than prose, for example raw HTML, `inlineMath` (remark-math) or an MDX expression. That change is dropped.                              |
-| `unmatched-edit` | A paragraph, heading or table cell whose nodes no longer match the source (an earlier plugin changed them, or the parser gave them no position). The whole text block is left unchanged. |
+| `ruleId`                 | Meaning                                                                                                                                                                                                   |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dropped-change`         | polytypo changed text that lives in a node other than prose, for example raw HTML, `inlineMath` (remark-math) or an MDX expression. That one change is dropped; the text around it is carried.            |
+| `left-unchanged`         | polytypo's result would change a node in a way that can move the boundary of the surrounding text (a link whose address would end differently, for instance). The unit described below is left unchanged. |
+| `unmatched-edit`         | Some node of a unit no longer matches the source: an earlier plugin changed it, or the parser gave it no position. The unit is left unchanged.                                                            |
+| `frontmatter-not-parsed` | `frontmatterKeys` is set and the document starts with a frontmatter block, but the tree has no `yaml` node. Add `remark-frontmatter` before this plugin.                                                  |
 
-When the change would alter the boundary of a neighbouring node, such as a link whose address would
-end differently, the paragraph, heading or table cell around it is left unchanged as a whole, so a
-quotation is never half converted.
+**The unit.** Quote pairing and spacing reach across blocks, so the plugin carries text in units,
+all or nothing. A unit is one paragraph, heading or table cell, except that everything inside a
+blockquote, a list or a footnote definition is one unit together with the outermost such container
+around it. If any part of a unit is left unchanged, so is the whole unit. Other paragraphs of the
+document are decided on their own.
 
 These cases stop the build with an error:
 
 - `no-source`: the file has no source text (for example `processor.run(tree)` without a file).
-- `tree-shape`: the document parses to a different tree after typography.
+- `tree-shape`: the document parses to a different tree after typography, at a level above a
+  paragraph, heading or table cell. A change inside one of those is `left-unchanged` instead.
 - `reparse`: the typeset text does not parse with the processor's parser, which usually means
   `dialect` does not match the parser (`commonmark` for an MDX document, for instance).
 - A `PolytypoError` from polytypo, such as `POLYTYPO_UNKNOWN_LOCALE` or, for an MDX document that

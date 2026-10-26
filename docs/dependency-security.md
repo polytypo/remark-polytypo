@@ -4,12 +4,13 @@ Canonical rules: the dependency-upgrades playbook. This file records only what d
 
 ## Deviations from the matrix
 
-| Item           | Deviation                                            | Reason                                                                                                                                                   | Date       |
-| -------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| `engines.node` | `>=20`, no upper bound (matrix: `>=24 <25`)          | Operator decision: a library must install wherever unified 11 and polytypo run. Node 20 is past end of life per the matrix table, and CI still tests it. | 2026-10-26 |
-| `vitest`       | Held at `^4.1.12` (matrix: 4.x, 5.x from 2026-10-03) | Vitest 5 requires Node 22.12 or newer; the Node 20 test job runs the suite on Node 20. Renovate `allowedVersions: "<5"`.                                 | 2026-10-26 |
-| `@types/node`  | `^24`                                                | Types follow the CI runtime major, not the `engines` floor; the library source uses no Node API.                                                         | 2026-10-26 |
-| `unified`      | Peer `^11.0.0`, dev `^11.0.5`                        | Peer range is the supported line; dev pins the tested release.                                                                                           | 2026-10-26 |
+| Item                           | Deviation                                                                                                 | Reason                                                                                                                                                   | Date       |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `engines.node`                 | `>=20`, no upper bound (matrix: `>=24 <25`)                                                               | Operator decision: a library must install wherever unified 11 and polytypo run. Node 20 is past end of life per the matrix table, and CI still tests it. | 2026-10-26 |
+| `vitest`                       | Held at `^4.1.12` (matrix: 4.x, 5.x from 2026-10-03)                                                      | Vitest 5 requires Node 22.12 or newer; the Node 20 test job runs the suite on Node 20. Renovate `allowedVersions: "<5"`.                                 | 2026-10-26 |
+| `@types/node`                  | `^24`                                                                                                     | Types follow the CI runtime major, not the `engines` floor; the library source uses no Node API.                                                         | 2026-10-26 |
+| `unified`                      | Peer `^11.0.0`, dev `^11.0.5`                                                                             | Peer range is the supported line; dev pins the tested release.                                                                                           | 2026-10-26 |
+| npm in the release publish job | Not installed; the job pins Node `24.22.1`, which bundles npm 11.19.1 (nodejs.org dist index, 2026-10-20) | Trusted publishing needs npm 11.5.1 or newer. Installing npm inside a job that holds `id-token: write` adds an unpinned download to the publish path.    | 2026-10-26 |
 
 ## Accepted advisories (`audit.ignore`)
 
